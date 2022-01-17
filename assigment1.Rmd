@@ -1,0 +1,862 @@
+---
+title: "assignment1"
+output: html_document
+---
+
+# East Palo Alto OPA analysis
+
+## 1 Arguments on OPA Policy
+
+The Opportunity to Purchase ("OPA") Policy gives tenants, qualified nonprofits, or jurisdictions the first opportunity to purchase a residential property or assign their right to purchase to another entity when the owner is ready to sell.
+
+For OPA supporters, they believe that OPA is a policy in line with the current sate of the EPA housing market, and provide some examples of OPA’s success in other cities as a reference. While OPA differ across jurisdictions, the basic frameworks are the same. 
+
+On Oct 5, 2021 City Council Meeting, OPA supporters mentioned that, as far as the current situation is concerned, the protection provided by state law for tenants is limited, tenants displacement and investors ownership becomes more common, first-time home buyers have fewer opportunities. Meanwhile, flipping inflates home prices, making housing more unaffordable. The community feedback on one consideration for OPA policy, income level, indicated that most want to see housing for households that made 30-50& AMI. On Nov 16 City Council Meeting, applicability was incorporated in City Council feedback, and the ordinance exempts owner-occupied single-family dwellings. This is consistent with the views initially held by the OPA policy supporters. The policy assumes that homeowners are high-income “investors” with lots of money, and points all the evidence-gathering tasks and surcharges to homeowners who want to sell, who may also bear the potential penalties and surcharges imposed by the policy. Therefore exempting owner-occupied single family dwellings neatly protects homeowners who are not such investors. The Council Meeting on Dec 7 proposed several key changes to ordinance according the public feedback, including exemption for owner-occupied properties of three or fewer units, eliminating the Appraisal Section, creating a 15% Margin Rule for a Potential Eligible Purchaser, Increasing the contract purchase deposit amount, and other reasonable changes for improving the OPA policy.
+
+Meanwhile, opponents also analyze the unreasonableness and unfairness of OPA from the perspective of their interests, and believe that although ordinance is diluted under homeowners pressure, it is still unable to fundamentally solve the problem that long-term, low-income EPA tenants cannot afford housing. They mentioned that the ordinance limits the free market, reduces the property tax revenue and disincentives housing developers to enter EPA to develop new houses. However, their arguments mainly focus on the fact that OPA will lead to the people of EPA cannot have the same right as everyone else in USA to realize the financial part of the return on the investment they made, and do not have the freedom to sell their property on when the time was right for them. In addition, the homeowners in East Palo Alto California who opposed this ordinance mentioned that OPA does not provide subsidies for the long-term low-income EPA tenants but puts burden on individual homeowners of EPA, which is unfair.
+
+Under this circumstance, we want to focus on the following questions: change in housing burden in recent years in EPA, and changes in housing tenure and property value.
+
+```{r, include = F}
+knitr::opts_chunk$set(echo = F, warning = F, message = F)
+```
+
+```{r}
+library(tidyverse)
+library(readxl)
+library(plotly)
+library(tigris)
+library(censusapi)
+library(sf)
+library(leaflet)
+library(tidycensus)
+library(mapview)
+Sys.setenv(CENSUS_KEY="60e044e0b171438ffa284a00c4a369df21caa10e")
+```
+
+## 2 Housing Burden
+
+### 2.1 Introduction to datasets
+To assess the housing status of the EPA, we used ACS 5-yr data to analyze housing costs for homeowners and renters separately.
+For renter-occupied housing units, we used census data B25074, which provides information about the household income by gross rent as a percentage of household income. And for owner-occupied housing units, we used census data B25095 for the same type of information. 
+```{r}
+acs_vars_2019_5yr <-
+  listCensusMetadata(
+    name = "2019/acs/acs5",
+    type = "variables"
+  )
+ca_places <- places(state="CA", cb = T, progress_bar = F)
+```
+
+```{r}
+Rent <-
+  getCensus(
+    name = "acs/acs5",
+    vintage = 2019,
+    region = "place:*",
+    regionin = "state:06",
+    vars = "group(B25074)"
+  ) %>% left_join(
+    ca_places %>% 
+      select(PLACEFP), 
+    by = c("place" = "PLACEFP") 
+) 
+```
+
+```{r}
+Rent_percentage <- Rent %>%
+  select(!c(GEO_ID,state,place,NAME) & !ends_with(c("EA","MA","M"))) %>%
+  pivot_longer(
+    ends_with("E"),
+    names_to = "variable",
+    values_to = "estimate"
+  ) %>%
+  left_join(
+    acs_vars_2019_5yr %>% 
+      select(name, label), 
+    by = c("variable" = "name")
+  )%>% 
+  select(-variable) %>% 
+  separate(
+    label,
+    into = c(NA,NA,"RENTER COSTS","percentage"),
+    sep = "!!"
+  ) %>% 
+  filter(!is.na(percentage))%>% 
+  left_join(
+    ca_places %>% 
+      select(PLACEFP), 
+    by = c("geometry" = "geometry")
+  )
+```
+
+```{r}
+Ownercosts <-
+  getCensus(
+    name = "acs/acs5",
+    vintage = 2019,
+    region = "place:*",
+    regionin = "state:06",
+    vars = "group(B25095)"
+  ) %>%  left_join(
+    ca_places %>% 
+      select(PLACEFP), 
+    by = c("place" = "PLACEFP")
+)
+```
+
+
+```{r}
+Ownercosts_percentage <- Ownercosts  %>%
+  select(!c(GEO_ID,state,place,NAME) & !ends_with(c("EA","MA","M"))) %>%
+  pivot_longer(
+    ends_with("E"),
+    names_to = "variable",
+    values_to = "estimate"
+  ) %>%
+  left_join(
+    acs_vars_2019_5yr %>% 
+      select(name, label), 
+    by = c("variable" = "name")
+  )%>% 
+  select(-variable) %>% 
+  separate(
+    label,
+    into = c(NA,NA,"OWNER COSTS","percentage"),
+    sep = "!!"
+  ) %>% 
+  filter(!is.na(percentage)) %>% 
+  left_join(
+    ca_places %>% 
+      select(PLACEFP), 
+    by = c("geometry" = "geometry")
+  )
+```
+
+```{r}
+epa_boundary <- places("CA", progress_bar = F) %>% 
+  filter(NAME == "East Palo Alto")
+```
+
+```{r}
+Rent_percentage <- Rent_percentage %>% 
+  left_join(ca_places %>% select(PLACEFP = PLACEFP)) %>% 
+  st_as_sf() %>% 
+  st_centroid() %>% 
+  .[epa_boundary, ] %>% 
+  st_drop_geometry() %>% 
+  left_join(ca_places %>% select(PLACEFP = PLACEFP))%>% 
+  st_as_sf()
+```
+```{r}
+Ownercosts_percentage <- Ownercosts_percentage %>% 
+  left_join(ca_places %>% select(PLACEFP = PLACEFP)) %>% 
+  st_as_sf() %>% 
+  st_centroid() %>% 
+  .[epa_boundary, ] %>% 
+  st_drop_geometry() %>% 
+  left_join(ca_places %>% select(PLACEFP = PLACEFP))%>% 
+  st_as_sf() 
+```
+
+### 2.2 Housing costs by income
+
+For groups with different levels of income, we analyzed the proportion of housing costs their income. 
+
+The plot below shows the distribution of housing costs for different income groups in the owner-occupied household. It can be seen that as the proportion of housing cost to income increases, the proportion of high-income groups decreases, and low-income groups versa. This is in line with our common sense, that is, households with severe housing burden (>50%) tend to earn less than $50,000-$74,999; while those with little housing burden (<20%) mostly earn more than $100,000.
+
+```{r}
+housing_burden_income_owner <- 
+  Ownercosts_percentage %>% 
+  group_by(`OWNER COSTS`, percentage) %>% 
+  summarize(estimate = sum(estimate)) %>% 
+  ggplot() +
+  geom_bar(
+    aes(
+      x = percentage %>% factor(levels = unique(Ownercosts_percentage$percentage)),
+      y = estimate,
+      fill = `OWNER COSTS`%>% factor(levels = unique(Ownercosts_percentage$`OWNER COSTS`))
+    ),
+    stat = "identity",
+    position = "fill"
+  ) +
+  labs(
+    x = "housing cost percentage",
+    y = "percentage of households",
+    title = "housing cost by income (owner-occupied household)",
+    fill = "household income"
+  )+ coord_flip()
+housing_burden_income_owner
+```
+
+For renter-occupied households, we performed the same analysis. In the figure below, we can find that the distribution of housing costs of each income level group is roughly the same as that of owner-occupied households. Most of the households with severe housing burden have low income levels. However, in the plot of renter-occupied households, the proportion of very high-income groups (>$100,000) in the low-burdened households is higher, exceeding 60%; in the severely-burdened households, the group with incomes in the range of $10,000-$49,999 close to 70%. This difference suggests that the distribution of housing costs in renter-occupied households is more uneven among different income groups, there seems to be a disproportionate housing burden on low-income groups.
+
+```{r}
+housing_burden_income_renter <- 
+  Rent_percentage %>% 
+  group_by(`RENTER COSTS`, percentage) %>% 
+  summarize(estimate = sum(estimate)) %>% 
+  ggplot() +
+  geom_bar(
+    aes(
+      x = percentage %>% factor(levels = unique(Rent_percentage$percentage)),
+      y = estimate,
+      fill = `RENTER COSTS` %>% factor(levels = unique(Rent_percentage$`RENTER COSTS`))
+    ),
+    stat = "identity",
+    position = "fill"
+  ) +
+  labs(
+    x = "housing cost percentage",
+    y = "percentage of households",
+    title = "housing cost by income (renter-occupied household)",
+    fill = "household income"
+  )+ coord_flip()
+housing_burden_income_renter
+```
+
+### 2.3 Housing burden type characterization
+
+Next, according to the City Council's discussion on the OPA policies and literature review, we divided the housing burden into three levels. Housing costs accounting for less than 30% of income belong to "low-burden", 30%-50% belong to "burden", and more than 50% belong to "severe-burden". We compare the distribution of housing burdens between renter-occupied and owner-occupied households.
+
+```{r}
+Ownercosts_burden_type <- 
+  Ownercosts_percentage%>%mutate(
+    burden_type= case_when(
+      percentage %in% c(
+          "Less than 20.0 percent",
+          "20.0 to 24.9 percent",
+          "25.0 to 29.9 percent"
+        ) ~ "low_burden",
+      percentage %in% c(
+          "30.0 to 34.9 percent",
+          "35.0 to 39.9 percent",
+          "40.0 to 49.9 percent"
+        ) ~ "burdened",
+      percentage %in% c(
+          "50.0 percent or more"
+        ) ~ "severely_burdened")
+    ) %>% 
+  group_by(PLACEFP,burden_type) %>% 
+  summarize(
+    estimate = sum(estimate, na.rm = T)
+  ) %>% mutate(group = "owner")
+
+Rentercosts_burden_type <- 
+  Rent_percentage %>% 
+  mutate(
+    burden_type= case_when(
+      percentage %in% c(
+          "Less than 20.0 percent",
+          "20.0 to 24.9 percent",
+          "25.0 to 29.9 percent"
+        ) ~ "low_burden",
+      percentage %in% c(
+          "30.0 to 34.9 percent",
+          "35.0 to 39.9 percent",
+          "40.0 to 49.9 percent"
+        ) ~ "burdened",
+      percentage %in% c(
+          "50.0 percent or more"
+        ) ~ "severely_burdened")
+    ) %>% 
+  group_by(PLACEFP,burden_type) %>% 
+  summarize(
+    estimate = sum(estimate, na.rm = T)
+  ) %>% mutate(group = "renter") 
+```
+
+
+```{r}
+epa_burdened_type  <- 
+  rbind(Rentercosts_burden_type,Ownercosts_burden_type ) %>% filter(!is.na(burden_type))
+```
+
+```{r}
+burden_type_by_owner_or_renter <- 
+  epa_burdened_type %>% 
+  group_by(group, burden_type) %>% 
+  summarize(estimate = sum(estimate)) %>% 
+  ggplot() +
+  geom_bar(
+    aes(
+      x = group,
+      y = estimate,
+      fill = burden_type
+    ),
+    stat = "identity",
+    position = "fill"
+  ) +
+  labs(
+    x = "household type (renter/owner occupied)",
+    y = "percentage of households",
+    title = "burden type by household type",
+    fill = "household burden"
+  )+ coord_flip()
+burden_type_by_owner_or_renter
+```
+
+
+In the comparative analysis of the above plot, we can find that the owner has a relatively lower housing burden, and nearly 80% of the owner-occupied households belong to  "burden" or "low burden"; while among the renter-occupied households, nearly 30% households are facing a severe housing burden.
+
+### 2.4 Overall Analysis of Housing Burden in East Palo Alto
+```{r}
+Ownercosts_percentage_epa <- 
+  Ownercosts_percentage %>% mutate(
+    burden_type= case_when(
+      percentage %in% c(
+          "Less than 20.0 percent",
+          "20.0 to 24.9 percent",
+          "25.0 to 29.9 percent"
+        ) ~ "low_burden",
+      percentage %in% c(
+          "30.0 to 34.9 percent",
+          "35.0 to 39.9 percent",
+          "40.0 to 49.9 percent"
+        ) ~ "burdened",
+      percentage %in% c(
+          "50.0 percent or more"
+        ) ~ "severely_burdened")
+    ) %>% 
+  st_drop_geometry()  %>% as.data.frame()%>% 
+  group_by(burden_type) %>% 
+  summarize(
+    total_pop = sum(estimate, na.rm = T)
+  ) %>% 
+  mutate(type = "owner")%>% 
+  mutate(all_owner = sum(total_pop))
+```
+
+```{r}
+Rent_percentage_epa <- 
+  Rent_percentage %>% mutate(
+    burden_type= case_when(
+      percentage %in% c(
+          "Less than 20.0 percent",
+          "20.0 to 24.9 percent",
+          "25.0 to 29.9 percent"
+        ) ~ "low_burden",
+      percentage %in% c(
+          "30.0 to 34.9 percent",
+          "35.0 to 39.9 percent",
+          "40.0 to 49.9 percent"
+        ) ~ "burdened",
+      percentage %in% c(
+          "50.0 percent or more"
+        ) ~ "severely_burdened")
+    ) %>% 
+  st_drop_geometry()  %>% as.data.frame()%>% 
+  group_by(burden_type) %>% 
+  summarize(
+    total_pop = sum(estimate, na.rm = T)
+  ) %>% 
+  mutate(type = "renter")%>% 
+  mutate(all_renter = sum(total_pop))
+```
+
+```{r}
+Rent_percentage_epa_no_na <-
+  Rent_percentage_epa %>%
+  filter(!is.na(burden_type))%>%
+  select(-all_renter)
+
+Ownercosts_percentage_epa_no_na <-
+  Ownercosts_percentage_epa %>%
+  filter(!is.na(burden_type))%>%
+  select(-all_owner)
+
+epa_burdened  <- rbind(Rent_percentage_epa_no_na, Ownercosts_percentage_epa_no_na)
+```
+
+The overall % of renter-occupied units in East Palo Alto is 60.2%:
+```{r}
+`overall % of renter-occupied units` = 4648/(3076+4648)
+`overall % of renter-occupied units`
+```
+
+ % of severely burdened households that are renter-occupied households is 67%:
+```{r}
+` % of severely burdened households that are renter households` = 1367/(1367+673)
+` % of severely burdened households that are renter households`
+```
+
+% of severely burdened households that are owner-occupied households is 33%:
+```{r}
+` % of severely burdened households that are owner households` = 673/(1367+673)
+` % of severely burdened households that are owner households`
+```
+
+Among the households with "severe burden", the proportion of renters is close to 75%, and the proportion of renters in the households with "burden" exceeds 60%. In contrast, the owner's housing burden is more optimistic.
+
+```{r}
+epa_burdened %>% 
+  ggplot() +
+  geom_bar(
+    aes(
+      x = burden_type,
+      y = total_pop,
+      fill = type
+    ),
+    stat = "identity",
+    position = "fill"
+  ) +
+  labs(
+    x = "Housing burden",
+    y = "porpotion",
+    title = "total burdened population",
+    fill = "type of household"
+  )+ coord_flip()
+```
+
+### 2.5 EPA Moving status
+
+In this section, we studied EPA's population movement. We used the ACS 5-yr data group B07413. We wanted to understand how the mobility of renters and owners differed, and whether renters continued to move due to unaffordable housing.
+
+```{r}
+move <-
+  getCensus(
+    name = "acs/acs5",
+    vintage = 2019,
+    region = "place:*",
+    regionin = "state:06",
+    vars = "group(B07413)"
+  ) %>% left_join(
+    ca_places %>% 
+      select(PLACEFP), 
+    by = c("place" = "PLACEFP") 
+) %>%
+  select(!c(GEO_ID,state,place,NAME) & !ends_with(c("EA","MA","M"))) %>%
+  pivot_longer(
+    ends_with("E"),
+    names_to = "variable",
+    values_to = "estimate"
+  ) %>%
+  left_join(
+    acs_vars_2019_5yr %>% 
+      select(name, label), 
+    by = c("variable" = "name")
+  )%>% 
+  select(-variable) %>% 
+  separate(
+    label,
+    into = c(NA,NA,"Move","Type"),
+    sep = "!!"
+  ) 
+  
+```
+
+```{r}
+epa_boundary <- places("CA", progress_bar = F) %>% 
+  filter(NAME == "East Palo Alto")
+```
+```{r}
+move_epa<- move  %>% 
+  left_join(ca_places %>% select(PLACEFP = PLACEFP)) %>% 
+  st_as_sf() %>% 
+  st_centroid() %>% 
+  .[epa_boundary, ] %>% 
+  st_drop_geometry() %>% 
+  left_join(ca_places %>% select(PLACEFP = PLACEFP))%>%filter(!is.na(Type))%>%
+  mutate(Type = ifelse(
+    Type == "Householder lived in owner-occupied housing units",
+    "Owner",
+    "Renter"
+  ))
+```
+```{r}
+move_epa <- 
+  move_epa %>% 
+  group_by(Move, Type) %>% 
+  summarize(estimate = sum(estimate)) %>% 
+  ggplot() +
+  geom_bar(
+    aes(
+      x = Move,
+      y = estimate,
+      fill = Type
+    ),
+    stat = "identity",
+    position = "fill"
+  ) +
+  labs(
+    x = "household type (renter/owner occupied)",
+    y = "percentage of households",
+    title = "burden type by household type",
+    fill = "Move status"
+  )+ coord_flip()
+move_epa 
+```
+
+
+The figure above shows that the main groups moved within the same county and moved to different county within the same state are renter-occupied households, and the main groups moved to different states are owner-occupied households. 
+
+The ratio of renters who stay in the same house to owners who stay in the same house is roughly the same as the ratio of total owners to total renters.
+
+### 2.6 Racial bias
+
+In this section, we analyze the race of householder in EPA. We use ACS 5-yr data group B25003. We studied the relationship between race and household type (rent or own).
+
+The figure below shows that there's a disproportionate housing tenure on "Some Other Race Alone" and "Black or African American" groups.
+
+```{r}
+census_race_categories <- 
+  c(
+    "White Alone",
+    "Black or African American",
+    "American Indian and Alaska Native Alone",
+    "Asian Alone",
+    "Native Hawaiian and Other Pacific Islander Alone",
+    "Some Other Race Alone",
+    "Two or More Races"
+  )
+
+bay_tenure_race <-
+  1:7 %>% 
+  map_dfr(function(x){
+    getCensus(
+      name = "acs/acs5",
+      vintage = 2019,
+      region = "county:081",
+      regionin = "state:06",
+      vars = paste0("group(B25003",LETTERS[x],")")
+    ) %>%
+      select(!c(GEO_ID,state,NAME) & !ends_with(c("EA","MA","M"))) %>%
+      pivot_longer(
+        ends_with("E"),
+        names_to = "name",
+        values_to = "estimate"
+      ) %>%
+      left_join(
+        acs_vars_2019_5yr %>% 
+          select(name, label)
+      ) %>% 
+      select(-name) %>% 
+      separate(
+        label,
+        into = c(NA,NA,"tenure"),
+        sep = "!!"
+      ) %>% 
+      filter(!is.na(tenure)) %>% 
+      mutate(race = census_race_categories[x])
+  })
+
+bay_tenure_race %>% 
+  group_by(tenure, race) %>% 
+  summarize(estimate = sum(estimate)) %>% 
+  ggplot() +
+  geom_bar(
+    aes(
+      x = tenure,
+      y = estimate,
+      fill = race
+    ),
+    stat = "identity",
+    position = "stack"
+  ) +
+  labs(
+    x = "tenure",
+    y = "Number of households",
+    title = "Bay Area household tenure by race",
+    fill = "Race of householder"
+  )
+```
+
+
+## 3 Parcel Data
+
+### 3.1 parcel mapping 2018/2019
+
+In this part, we drew an East Palo Alto zoning map that shows parcel shapes with zoning. The data is scraped from esri2sf.
+
+```{r}
+library(censusapi)
+library(tidyverse)
+library(tigris)
+library(sf)
+library(leaflet)
+```
+
+
+```{r}
+library(esri2sf)
+
+epa_zoning <- esri2sf("https://services8.arcgis.com/0IC8hha3hgQkmGoa/arcgis/rest/services/EastPaloAltoZoning_2021_WFL1/FeatureServer/1")
+```
+
+
+```{r}
+mapview(epa_zoning)
+```
+
+Next, we used the dataset from an official San Mateo County data site called "secured propert taxes", this dataset provide information about the homeowner exemption field and net value. Typically, a residential property would have an Exemption of $0, $5600, or $7000. $5600 and $7000 are near-certain indications that a property is owner-occupied. $0 suggests that a property is renter-occupied. We assume that an owner would not forget to apply for the exemption.
+
+```{r}
+sm_secured = read_csv("Secured_Property_Taxes.csv")
+```
+
+```{r}
+epa_zones <-
+  epa_zoning %>% 
+  left_join(
+    sm_secured %>% 
+      mutate(
+        APN = `Parcel Number`%>% 
+           str_remove_all("-"))
+  )%>% 
+  filter(!is.na(APN)) %>% 
+  filter(New_Zone == 'R-LD')
+```
+
+In the below map, we drew the distribution of housing tenure type in a zone level. Take 2018/2019 as an example, the zones in blue represent the "owner-occupied" housing, and the rest in yellow represent the "renter-occupied" housing.
+
+As can be seen, "renter-occupied" housing has more zones compared that of"owner-occupied" housing. The overall distribution of tenure is relatively uniform in East Palo Alto.
+
+```{r}
+leaflet() %>% 
+  addProviderTiles(provider = providers$CartoDB.Positron) %>% 
+  addPolygons(
+    data = epa_zones %>% 
+      filter(`Fiscal Year` == "2018/2019"),
+    fillColor = "yellow",
+    color = "black",
+    weight = 0.5
+  ) %>% 
+  addPolygons(
+    data = epa_zones %>% 
+      filter(`Fiscal Year` == "2018/2019") %>% 
+      filter(Exemption %in% c(5600,7000)),
+    fillColor = "blue",
+    color = "black",
+    weight = 0.5,
+    fillOpacity = 1
+  )
+```
+
+### 3.2 property value
+
+Next, we focused on our analysis on zoned for R-LD (low density residential), which could be seen as "single-family zoned parcels".
+
+As The dataset we got in 2.1 contains 4 different fiscal years, we used it to evaluate changes in tenure and changes in property value.
+
+```{r}
+epa_zones_propertyvalue <-
+  epa_zones %>% 
+  filter(!is.na(APN)) %>% 
+  filter(New_Zone == 'R-LD') %>% 
+  mutate(tenure = ifelse(
+      Exemption == 0,
+      "Renter occupied:",
+      "Owner occupied:"
+    )
+  )  %>% select('Assessed Value','Fiscal Year','Shape__Area','APN','tenure') %>% st_drop_geometry()  %>% as.data.frame()
+```
+
+```{r}
+epa_propertyvalue <- epa_zones_propertyvalue %>%
+ group_by( `Fiscal Year`) %>% 
+  summarize(TOTALvalue = 
+      sum(`Assessed Value` %>% as.numeric(), 
+        na.rm = T
+      ),
+    TOTALarea =
+      sum(
+        Shape__Area  %>% as.numeric(), 
+        na.rm = T
+      )
+  ) %>% 
+  mutate(
+    AVERAGEvalue =
+      TOTALvalue/TOTALarea
+  )
+```
+
+```{r}
+plot_ly() %>% 
+  add_trace(
+        data = epa_propertyvalue,
+        x = ~`Fiscal Year`,
+        y = ~`AVERAGEvalue`,
+        type = "scatter",
+        mode = "lines")%>% 
+  layout(
+    title = "average property value from 2015/2016 to 2018/2019", 
+    xaxis = list(
+      title = "Year"
+    ),
+    yaxis = list(
+      title = "average property value"
+    )
+  ) %>% 
+  config(displayModeBar = F)
+```
+
+In the figure above, we plotted the average property value in East Palo Alto from 2015/2016 to 2018/2019. During these four years, the average property value has been on the rise, with greater grow rate in 2017/2018 to 2018/2019. A rise in average property value could lead to a more severe housing burden, making it harder for low-income tenants to gain access to housing. Therefore, we need to verify whether the number of renter-occupied households has also increased in these years.
+```{r}
+epa_tenure <- epa_zones_propertyvalue %>%
+  mutate(tenure_renter = ifelse(
+      tenure == "Renter occupied:",
+      1,
+      0
+    )
+  )%>% 
+  mutate(tenure_owner = ifelse(
+      tenure == "Owner occupied:",
+      1,
+      0
+    )
+  )
+
+epa_tenure<-
+  epa_tenure%>%
+  group_by( `Fiscal Year`) %>%
+    summarize(total_renter_tenure = 
+      sum(tenure_renter %>% as.numeric(), 
+        na.rm = T
+      ),
+    total_owner_tenure = 
+      sum(tenure_owner %>% as.numeric(), 
+        na.rm = T
+      )
+    )
+```
+
+```{r}
+plot_ly() %>% 
+  add_trace(
+        data = epa_tenure,
+        x = ~`Fiscal Year`,
+        y = ~`total_renter_tenure`,
+        type = "scatter",
+        mode = "lines",
+        name = "renter-occupied tenure")%>%
+  add_trace(
+        data = epa_tenure,
+        x = ~`Fiscal Year`,
+        y = ~`total_owner_tenure`,
+        type = "scatter",
+        mode = "lines",
+        name = "owner-occupied tenure")%>%
+  layout(
+    title = "total renter/owner occupied tenure from 2015/2016 to 2018/2019", 
+    xaxis = list(
+      title = "Year"
+    ),
+    yaxis = list(
+      title = "total tenure"
+    )
+  ) %>% 
+  config(displayModeBar = F)
+```
+
+We plotted the changes in the number of renter-ocupuied and owner-occupied housing over the past four years. It can be seen that owner-occupied tenure has continued to rise, and renter-occupied tenure has been on the contrary. This can prove that OPA's arguments are to a certain extent in line with reality.
+
+```{r}
+leaflet() %>% 
+  addProviderTiles(provider = providers$CartoDB.Positron) %>% 
+  addPolygons(
+    data = epa_zones %>% 
+      filter(`Fiscal Year` == "2015/2016"),
+    fillColor = "yellow",
+    color = "black",
+    weight = 0.5,
+    fillOpacity = 0.3,
+    group = '2016-base'
+  ) %>% 
+  addPolygons(
+    data = epa_zones %>% 
+      filter(`Fiscal Year` == "2015/2016") %>% 
+      filter(Exemption %in% c(5600,7000)),
+    fillColor = "purple",
+    color = "black",
+    weight = 0.5,
+    fillOpacity = 0.3,
+    group = '2016'
+  )%>% 
+  addPolygons(
+    data = epa_zones %>% 
+      filter(`Fiscal Year` == "2016/2017") %>% 
+      filter(Exemption %in% c(5600,7000)),
+    fillColor = "blue",
+    color = "black",
+    weight = 0.5,
+    fillOpacity = 0.3,
+    group = '2017'
+  )%>% 
+  addPolygons(
+    data = epa_zones %>% 
+      filter(`Fiscal Year` == "2017/2018") %>% 
+      filter(Exemption %in% c(5600,7000)),
+    fillColor = "red",
+    color = "black",
+    weight = 0.5,
+    fillOpacity = 0.3,
+    group = '2018'
+  )%>% 
+  addPolygons(
+    data = epa_zones %>% 
+      filter(`Fiscal Year` == "2018/2019") %>% 
+      filter(Exemption %in% c(5600,7000)),
+    fillColor = "green",
+    color = "black",
+    weight = 0.5,
+    fillOpacity = 0.3,
+    group = '2019'
+  )%>%
+  addLayersControl(
+    baseGroups = "2016-base",
+    overlayGroups = c("2016","2017","2018","2019"),
+    options = layersControlOptions(collapsed = FALSE))
+```
+
+After visualizing changes in the number of tenures, we plotted the geographic distribution of tenures for each year from 2016 to 2019 based on 2016. The renter-occupied tenure in 2016-bsae is filled with yellow, and the renter-occupied tenure in 2016-2019 is filled with purple, blue, red, and green, respectively.
+
+To more intuitively represent tenure changes, we did the identification of change in tenure for all parcels. we colored for "same for 4 years" as red, and colored "has changed in any of the four years" as blue.
+
+```{r}
+epa_tenure_change <- epa_zones_propertyvalue %>%
+  mutate(tenure_renter = ifelse(
+      tenure == "Renter occupied:",
+      1,
+      0
+    )
+  ) %>% group_by(APN) %>% mutate(Change = sum(tenure_renter)) %>% summarise_all(first) %>% mutate(if_change = ifelse(
+      Change == 4 | Change == 0 ,
+      0,
+      1
+    )) %>% filter(!is.na(if_change))
+```
+
+```{r}
+epa_tenure_change1 <- epa_tenure_change %>%left_join(epa_zoning%>%select(APN)) %>%st_as_sf()
+```
+
+
+```{r}
+leaflet() %>% 
+  addProviderTiles(provider = providers$CartoDB.Positron) %>% 
+  addPolygons(
+    data =epa_tenure_change1,
+    fillColor = ~ifelse(if_change == 0, "red", "blue"),
+    color = ~ifelse(if_change == 0, "red", "blue"),
+    weight = 0.5,
+    fillOpacity = 0.5
+  )
+```
+
+Combining the above two maps, we believe that the tenure changes in the past four years in EPA are insignificant, and the area of owner-occupied zones has decreased slightly.
+
+## 4 Summary
+
+Based on the above analysis, we summarize the following arguments in support of East Palo Alto's OPA policy:
+
+(1) Disproportionality in housing cost by income
+
+(2) Disproportionality in housing burden by tenure type
+
+(3) The difference between the population flow of owner-occupied households and renter-occupied households, the forced displacement of renter
+
+(4) The continuous rise of average property value aggravates the problem of housing affordability
+
+(5) The continuous increase in the number of renter-occupied tenures and the continuous decline in the number of owner-occupied tenures
+
+(6) The trend of converting owner-occupied tenure into renter-occupied tenure
